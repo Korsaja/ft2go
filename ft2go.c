@@ -23,11 +23,11 @@ ft2go *addfront(ft2go *listp,ft2go *newp){
      newp->next = listp;
      return newp;
  }
-ft2go *addend(ft2go *listarr,ft2go *newp){
+ft2go *addend(ft2go *listp,ft2go *newp){
     ft2go *p;
     if (listarr == NULL)
         return newp;
-    for (p = listarr; listarr != NULL;p = p->next);
+    for (p = listp; listp != NULL;p = p->next);
     p->next = newp;
     return listarr;
 }
@@ -42,7 +42,7 @@ void freeall(ft2go *listp){
 
 
 ft2go *listEntry(char *path){
-        ft2go *listarr;
+        ft2go *listp;
         struct ftio ftio;
         struct ftprof ftp;
         struct fts3rec_offsets fo;
@@ -86,7 +86,7 @@ ft2go *listEntry(char *path){
                       srcPort = htons ((u_int16) ((tm >> 16) & 0xFFFF));
                       dstPort = htons ((u_int16) (tm & 0xFFFF));
                       bytes = 0;
-                      listarr = addfront(listarr,newItem(exAddrr,srcAddrr,dstAddrr,srcPort,dstPort,bytes));
+                      listp = addfront(listarr,newItem(exAddrr,srcAddrr,dstAddrr,srcPort,dstPort,bytes));
                       last_time = tm;
                     }
                   exAddrr  = htonl (*((u_int32 *) (rec + fo.exaddr)));
@@ -95,7 +95,7 @@ ft2go *listEntry(char *path){
                   srcPort = htons (*((u_int16 *) (rec + fo.srcport)));
                   dstPort = htons (*((u_int16 *) (rec + fo.dstport)));
                   bytes = htonl (*((u_int32 *) (rec + fo.dOctets)));
-                  listarr = addfront(listarr,newItem(exAddrr,srcAddrr,dstAddrr,srcPort,dstPort,bytes));
+                  listp = addfront(listarr,newItem(exAddrr,srcAddrr,dstAddrr,srcPort,dstPort,bytes));
                 }
           ftio_close (&ftio);
           return listarr;
