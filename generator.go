@@ -11,47 +11,30 @@ typedef struct ft2go {
          unsigned long exAddr;
          unsigned long srcAddr;
          unsigned long dstAddr;
-         short int srcPort;
-         short int dstPort;
          unsigned long bytes;
 }ft2go;
-void ft2goarr(struct ftio ftio,ft2go **in,char *filename){
+struct ftio ftio;
+void ft2goarr(struct ftio *ftio,ft2go **in,char *filename){
     struct ftprof ftp;
     struct fts3rec_offsets fo;
     struct ftver ftv;
     char *rec;
-    u_int32 last_time;
-    u_int32 tm;
     ftprof_start(&ftp);
-    ftio_get_ver (&ftio, &ftv);
+    ftio_get_ver (ftio, &ftv);
     fts3rec_compute_offsets (&fo, &ftv);
-    last_time = 0;
-	int i = 0;
-    for ( i = 0;i < ftio.fth.flows_count;i++){
+    int i = 0;
+    while((rec = ftio_read(ftio))){
         //strCnt++;
-		rec = ftio_read(&ftio);
-        tm = *((u_int32 *) (rec + fo.unix_secs));
-        if (last_time != tm)
-        {
-            in[i]->exAddr = 0;
-            in[i]->srcAddr = 0;
-            in[i]->dstAddr = 0;
-            //ft2go_rec->srcPort = htons ((u_int16) ((tm >> 16) & 0xFFFF));
-           // ft2go_rec->dstPort = htons ((u_int16) (tm & 0xFFFF));
-            in[i]->bytes = 0;
-            last_time = tm;
-			i++;
-        }
         in[i]->exAddr  = *((u_int32 *) (rec + fo.exaddr));
         in[i]->srcAddr = *((u_int32 *) (rec + fo.srcaddr));
         in[i]->dstAddr = *((u_int32 *) (rec + fo.dstaddr));
+  		in[i]->bytes = *((u_int32 *) (rec + fo.dOctets));
+		i++;
        // ft2go_rec->srcPort = *((u_int16 *) (rec + fo.srcport));
        // ft2go_rec->dstPort = *((u_int16 *) (rec + fo.dstport));
-        in[i]->bytes = *((u_int32 *) (rec + fo.dOctets));
-		i++;
     }
 
-    ftio_close (&ftio);
+    //ftio_close (&ftio);
    // fclose(fp);
 	//return strCnt;
 }
@@ -62,25 +45,31 @@ import (
 	"log"
 	"net"
 	"os"
-	"runtime"
 	"sync"
 	"unsafe"
 )
 
-const (
-	Threads    = 2 - 1
-	StructSize = 1 << 28
-)
+const StructSize = 1 << 28
+
 
 type Generator struct {
-	ftrecords chan []*ftrecord
+	jobsChannel chan []*ftrecord
 	wg sync.WaitGroup
+	threads int
+}
+
+func NewGenerator(threads int) *Generator {
+	return &Generator{
+		jobsChannel: make(chan []*ftrecord,threads),
+		threads: threads,
+		wg: sync.WaitGroup{},
+	}
 }
 
 type ftrecord struct {
-	exAddr  uint32
-	srcAddr uint32
-	dstAddr uint32
+	exAddr  net.IP
+	srcAddr net.IP
+	dstAddr net.IP
 	bytes   uint32
 }
 
@@ -92,78 +81,81 @@ func int2ip(ip uint32) net.IP {
 	result[3] = byte(ip)
 	return result
 }
-func (ft *ftrecord) String()string{
+func (ft *ftrecord) String() string {
 	return fmt.Sprintf("ex:%s src:%s dst:%s bytes:%d",
-		ft.GetExAddr().String(),
-		ft.GetSrcAddr().String(),
-		ft.GetDstAddr().String(),
+		ft.exAddr.String(),
+		ft.srcAddr.String(),
+		ft.dstAddr.String(),
 		ft.GetBytes())
 }
-func (ft *ftrecord) GetExAddr() net.IP  { return int2ip(ft.exAddr) }
-func (ft *ftrecord) GetSrcAddr() net.IP { return int2ip(ft.srcAddr) }
-func (ft *ftrecord) GetDstAddr() net.IP { return int2ip(ft.dstAddr) }
-func (ft *ftrecord) GetBytes() uint32   { return ft.bytes }
 
-func (g *Generator) Go(paths []string) {
-	g.ftrecords = make(chan []*ftrecord, Threads)
-	cgoLimiter := make(chan struct{}, Threads)
+func (ft *ftrecord) GetBytes() uint32 { return ft.bytes }
+
+func (g *Generator) Go(done chan<- struct{}, paths []string){
+	cgoLimiter := make(chan struct{},g.threads)
 	for _, path := range paths {
 		cgoLimiter <- struct{}{}
 		g.wg.Add(1)
 		go func(filename string) {
-			records := init_entrys(filename)
-			g.ftrecords <- records
+			g.jobsChannel <- init_entrys(filename)
 			<-cgoLimiter
+			done <- struct{}{}
 			g.wg.Done()
 		}(path)
 	}
-	go func() {
-		g.wg.Wait()
-		close(g.ftrecords)
-	}()
 }
-func (g *Generator)Stop(){
+func(g *Generator)Off(){
 	g.wg.Wait()
-	close(g.ftrecords)
+	close(g.jobsChannel)
 }
-func (g *Generator) GetRecordsChannel() chan []*ftrecord { return g.ftrecords }
 func init_entrys(path string) []*ftrecord {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+
 	f, err := os.Open(path)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer f.Close()
-	ftio := C.struct_ftio{}
-	C.ftio_init(&ftio, C.int(f.Fd()), C.FT_IO_FLAG_READ)
-	flows_count := int(ftio.fth.flows_count)
+	ftio := (*C.struct_ftio)(C.calloc(1, C.sizeof_ftio))
+	defer C.free(unsafe.Pointer(ftio))
 
-	ftrecords := make([]*ftrecord, flows_count)
-	for i := range ftrecords {
-		ftrecords[i] = &ftrecord{}
+	C.ftio_init(ftio, C.int(f.Fd()), C.FT_IO_FLAG_READ)
+	flowsCount := int(ftio.fth.flows_count)
+	cgoRecords := (*[StructSize]*C.ft2go)(C.calloc(C.ulong(flowsCount), C.sizeof_ft2go))
+	for i := 0; i < flowsCount; i++ {
+		cgoRecords[i] = (*C.struct_ft2go)(C.calloc(1, C.sizeof_ft2go))
 	}
-	cgoEntry := (*[StructSize]*C.ft2go)(C.malloc(C.size_t(C.sizeof_ft2go * flows_count)))
-	for i, record := range ftrecords {
-		ft2go := (*C.ft2go)(C.malloc(C.size_t(C.sizeof_ft2go)))
-		(*ft2go).exAddr = C.ulong(record.exAddr)
-		(*ft2go).srcAddr = C.ulong(record.srcAddr)
-		(*ft2go).dstAddr = C.ulong(record.dstAddr)
-		(*ft2go).bytes = C.ulong(record.bytes)
-		cgoEntry[i] = ft2go
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+	C.ft2goarr(ftio, &cgoRecords[0], cPath)
+
+	ft := make([]*ftrecord, flowsCount)
+	for i := 0; i < flowsCount; i++ {
+		rec := &ftrecord{
+			exAddr:  int2ip(uint32(cgoRecords[i].exAddr)),
+			srcAddr: int2ip(uint32(cgoRecords[i].srcAddr)),
+			dstAddr: int2ip(uint32(cgoRecords[i].dstAddr)),
+			bytes:   uint32(cgoRecords[i].bytes)}
+		ft[i] = rec
+		C.free(unsafe.Pointer(cgoRecords[i]))
 	}
-	C.ft2goarr(ftio, &cgoEntry[0], C.CString(path))
-	for i := 0; i < flows_count; i++ {
-		cgoElement := cgoEntry[i]
-		goElement := ftrecords[i]
-		goElement.exAddr = uint32(cgoElement.exAddr)
-		goElement.srcAddr = uint32(cgoElement.srcAddr)
-		goElement.dstAddr = uint32(cgoElement.dstAddr)
-		goElement.bytes = uint32(cgoElement.bytes)
-		//custom clear
-		C.free(unsafe.Pointer(cgoEntry[i]))
-	}
-	//custom clear
-	C.free(unsafe.Pointer(cgoEntry))
-	return ftrecords
+
+	C.free(unsafe.Pointer(cgoRecords))
+	return ft
 }
+
+type arena []unsafe.Pointer
+
+func (a *arena) calloc(count, size int) unsafe.Pointer {
+	ptr := C.calloc(C.size_t(count), C.size_t(size))
+	*a = append(*a, ptr)
+	return ptr
+}
+
+func (a *arena) free() {
+	for _, ptr := range *a {
+		C.free(ptr)
+	}
+}
+
+//11956118301 octets flowCount 509716
+//11956118301  octets flowCount 509716
