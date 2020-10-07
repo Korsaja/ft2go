@@ -62,7 +62,8 @@ func NewGenerator(threads int) *Generator {
 		wg:          sync.WaitGroup{},
 	}
 }
-func (g *Generator) Go(done chan<- struct{}, paths []string) {
+func (g *Generator) Go(done chan<- struct{},paths []string) {
+
 	cgoLimiter := make(chan struct{}, g.threads)
 	go func() {
 		defer func() {
@@ -73,15 +74,17 @@ func (g *Generator) Go(done chan<- struct{}, paths []string) {
 			cgoLimiter <- struct{}{}
 			g.wg.Add(1)
 			go func(filename string) {
-				defer g.wg.Done()
+				defer func() {
+					<-cgoLimiter
+					done <- struct{}{}
+					g.wg.Done()
+				}()
 				records, err := init_entrys(filename)
 				if err != nil {
 					g.errChannel <- err
 					return
 				}
 				g.jobsChannel <- records
-				<-cgoLimiter
-				done <- struct{}{}
 			}(path)
 		}
 		g.safeClosed()

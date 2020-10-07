@@ -4,12 +4,90 @@ import (
 	"flag"
 	"fmt"
 	"github.com/gosuri/uiprogress"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 )
+
+
+
+func main() {
+	exAddr := ExAddrFlag("gw", []net.IP{}, "gateway network address for more with sep=,")
+	dirFiles := flag.String("path", "", "file directory")
+	nfilters := IPNetFlag("filters",[]*net.IPNet{},"filter-primitive for more with sep=,")
+	flag.Parse()
+
+	//Get absolute path for file flow - tools
+	ftFiles, err := WalkPath(*dirFiles)
+	if err != nil{
+		fmt.Fprintf(os.Stderr,"[!] Error :: %s \n",err.Error())
+		os.Exit(1)
+	}
+	// For show progress bar
+	counterChan := make(chan struct{},len(ftFiles))
+
+	//Progress bar for
+	//processing and converting
+	// Generator
+	uiprogress.Start()
+	barGenerator := uiprogress.AddBar(len(ftFiles))
+	barGenerator.PrependElapsed().AppendCompleted()
+	barGenerator.PrependFunc(func(b *uiprogress.Bar) string {
+		return fmt.Sprintf("Processing :: [ %d / %d ] :: ",
+			barGenerator.Current(),len(ftFiles))
+	})
+	go func() {for i:=0;i < len(ftFiles);i++{<-counterChan;barGenerator.Incr()}}()
+
+	numCPU := runtime.NumCPU()
+	generator := NewGenerator(numCPU)
+	generator.Go(counterChan,ftFiles)
+	go func() {
+		if err := <- generator.errChannel; err != nil{
+			fmt.Fprintf(os.Stderr,"[!] Error :: %s \n",err.Error())
+		}
+	}()
+
+	//Progress bar for
+	//filtration
+	barFiltration := uiprogress.AddBar(len(ftFiles))
+	barFiltration.PrependElapsed().AppendCompleted()
+	barFiltration.PrependFunc(func(b *uiprogress.Bar) string {
+		return fmt.Sprintf("Filtration :: [ %d / %d ] :: ",
+			barFiltration.Current(),len(ftFiles))
+	})
+	filter := func(rec *ftrecord) bool{
+		for _, ex := range exAddr.Addr{
+			if ex.Equal(rec.exAddr){
+				for _, ipNet := range nfilters.IPNet{
+					if ipNet.Contains(rec.srcAddr) ||
+						ipNet.Contains(rec.dstAddr){
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+	records := make([][]*ftrecord,0)
+	for record := range generator.jobsChannel{
+		records = append(records,SliceFilter(record,filter))
+		barFiltration.Incr()
+	}
+
+	var sum uint64
+	for _, rx := range records{
+		for _, r := range rx{
+			sum += uint64(r.GetBytes())
+		}
+	}
+
+
+
+	fmt.Println("Sum = ",sum)
+
+
+}
 
 func WalkPath(root string) (paths []string, err error) {
 	err = filepath.Walk(root, func(path string,
@@ -28,61 +106,3 @@ func WalkPath(root string) (paths []string, err error) {
 	}
 	return
 }
-func Filter(records []*ftrecord, fn func(ft *ftrecord)) {
-	for _, record := range records {
-		fn(record)
-	}
-}
-
-func main() {
-	filter := flag.String("exaddr", "", "exAddr")
-	root := flag.String("root", "", "roots")
-	flag.Parse()
-	exAddr := net.ParseIP(*filter)
-	br1 := net.ParseIP("185.173.73.255")
-	ftFiles, err := WalkPath(*root)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	done := make(chan struct{}, len(ftFiles))
-
-	uiprogress.Start()
-	bar := uiprogress.AddBar(len(ftFiles))
-	bar.PrependCompleted().PrependElapsed().AppendCompleted()
-	bar.PrependFunc(func(b *uiprogress.Bar) string {
-		return fmt.Sprintf("Files::%d::rdy::%d", len(ftFiles), bar.Current())
-	})
-	generator := NewGenerator(runtime.NumCPU())
-	go func() {
-		for i := 0; i < len(ftFiles); i++ {
-			<-done
-			bar.Incr()
-		}
-	}()
-
-	var sum uint64
-	networks := []string{"10.253.0.0/16", "10.221.0.0/16"}
-	cidrs := make([]*net.IPNet, len(networks))
-	for i, n := range networks {
-		_, ipNet, _ := net.ParseCIDR(n)
-		cidrs[i] = ipNet
-	}
-	generator.Go(done, ftFiles)
-
-	for entry := range generator.jobsChannel {
-		Filter(entry, func(ft *ftrecord) {
-			if ft.exAddr.Equal(exAddr) || ft.exAddr.Equal(br1) {
-				for _, ipNet := range cidrs {
-					if ipNet.Contains(ft.srcAddr) || ipNet.Contains(ft.dstAddr) {
-						sum += uint64(ft.GetBytes())
-					}
-				}
-			}
-		})
-	}
-
-	fmt.Printf("Entry with filter %s SumBytes = %d\n", exAddr.String(), sum)
-}
-//216536942984
-//216538516644

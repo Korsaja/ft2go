@@ -7,12 +7,12 @@ func applyFilter(fn filter, rec *ftrecord) bool {
 }
 // parallel filter
 
-func SliceFilter(fn filter, records []*ftrecord) []*ftrecord {
+func SliceFilter(records []*ftrecord,fn filter) []*ftrecord {
 	var result []*ftrecord
-	f := func(batch []*ftrecord,c chan struct{}) {
-		for _, rec := range batch {
-			if applyFilter(fn,rec){
-				result = append(result,rec)
+	f := func(i,j int,c chan struct{}) {
+		for ;i < j; i++ {
+			if applyFilter(fn,records[i]){
+				result = append(result,records[i])
 			}
 		}
 		c <- struct{}{}
@@ -20,9 +20,8 @@ func SliceFilter(fn filter, records []*ftrecord) []*ftrecord {
 	maxGo := 4
 	c := make(chan struct{},maxGo)
 	length := len(records)
-	for i := 0; i < length; i+=maxGo {
-		batch := records[i:min(i+maxGo, length)]
-		go f(batch,c)
+	for i := 0; i < maxGo; i++ {
+		go f(i*length/maxGo, (i+1)*length/maxGo,c)
 	}
 
 	for i := 0; i < maxGo; i++ {
