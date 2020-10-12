@@ -27,4 +27,5 @@ name = "vlan20"
 ips = ["192.168.20.0/24","192.168.10.0/24"]
 name = "allvlan"
 ```
-
+If you need to add netflow fields see names and data types add them to the `generator.go`:<br>
+https://github.com/adsr/flow-tools/blob/master/lib/ftlib.h#L613
