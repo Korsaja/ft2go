@@ -2,7 +2,14 @@ package main
 
 import "github.com/BurntSushi/toml"
 
+
 type Config struct {
+	SMTP struct {
+		Server string `toml:"server"`
+		Port   int    `toml:"port"`
+		Mail   string `toml:"mail"`
+		Pass   string `toml:"pass"`
+	} `toml:"smtp"`
 	Devices []struct {
 		Attr []struct {
 			IP   string `toml:"ip"`

@@ -1,30 +1,41 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 )
 
+var ErrInvalidIP = errors.New("Bad IP address")
+
 type ftrecord struct {
-	exAddr  net.IP
-	srcAddr net.IP
-	dstAddr net.IP
+	exAddr  uint32
+	srcAddr uint32
+	dstAddr uint32
 	bytes   uint32
 }
 
-func int2ip(ip uint32) net.IP {
-	result := make(net.IP, 4)
-	result[0] = byte(ip >> 24)
-	result[1] = byte(ip >> 16)
-	result[2] = byte(ip >> 8)
-	result[3] = byte(ip)
-	return result
+func (ft *ftrecord) ExAddr() net.IP  { return uint2ip(ft.exAddr) }
+func (ft *ftrecord) SrcAddr() net.IP { return uint2ip(ft.srcAddr) }
+func (ft *ftrecord) DstAddr() net.IP { return uint2ip(ft.dstAddr) }
+
+func ip2uint(ip net.IP) (uint32, error) {
+	ip = ip.To4()
+	if ip == nil {
+		return 0, ErrInvalidIP
+	}
+	return uint32(ip[3]) | uint32(ip[2])<<8 | uint32(ip[1])<<16 | uint32(ip[0])<<24, nil
+}
+
+func uint2ip(ip uint32) net.IP {
+	return net.IPv4(byte(ip>>24), byte(ip>>16&0xFF),
+		byte(ip>>8)&0xFF, byte(ip&0xFF))
 }
 func (ft *ftrecord) GetBytes() uint32 { return ft.bytes }
 func (ft *ftrecord) String() string {
 	return fmt.Sprintf("ex:%s src:%s dst:%s bytes:%d",
-		ft.exAddr.String(),
-		ft.srcAddr.String(),
-		ft.dstAddr.String(),
+		uint2ip(ft.exAddr).String(),
+		uint2ip(ft.srcAddr).String(),
+		uint2ip(ft.dstAddr).String(),
 		ft.GetBytes())
 }

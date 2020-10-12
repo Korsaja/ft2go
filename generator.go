@@ -41,6 +41,10 @@ void ft2goarr(struct ftio *ftio,ft2go **in){
 */
 import "C"
 import (
+	"fmt"
+	"github.com/gosuri/uiprogress"
+	"golang.org/x/sync/errgroup"
+	"net"
 	"os"
 	"sync"
 	"unsafe"
@@ -49,76 +53,104 @@ import (
 const StructSize = 1 << 28
 
 type Generator struct {
+	jobsChannel chan []*ftrecord
 	errChannel  chan error
+	done        chan struct{}
+	files       []string
 	mu          sync.Mutex
 	wg          sync.WaitGroup
-	filter      filterFunc
 	closed      bool
 	threads     int
 }
 
-type filterFunc func(*ftrecord)
-var syncPool = sync.Pool{
-	New: func() interface{} { return new(ftrecord) },
-}
-func getPool()*ftrecord{return syncPool.Get().(*ftrecord)}
-func putPool(rec *ftrecord){
-	rec.exAddr = 0
-	rec.srcAddr = 0
-	rec.dstAddr = 0
-	rec.bytes = 0
-	syncPool.Put(rec)
-}
-
-
-
-func NewGenerator(threads int, fn filterFunc) *Generator {
+func NewGenerator(threads int, ftFiles []string) *Generator {
 	return &Generator{
+		jobsChannel: make(chan []*ftrecord, threads),
 		errChannel:  make(chan error, 1),
-		threads:     threads,
-		filter:      fn,
+		done:        make(chan struct{},len(ftFiles)),
+		files:       ftFiles,
+		mu:          sync.Mutex{},
 		wg:          sync.WaitGroup{},
+		closed:      false,
+		threads:     threads,
 	}
 }
-func (g *Generator) Go(done chan<- struct{}, paths []string) {
-	cgoLimiter := make(chan struct{}, g.threads)
+func (g *Generator) Start(exAddersIPs []net.IP, clients *Clients, numCPU int) error {
+	lenghtFiles := len(g.files)
+	uiprogress.Start()
+	barGenerator := uiprogress.AddBar(lenghtFiles)
+	barGenerator.PrependElapsed().AppendCompleted()
+	barGenerator.PrependFunc(func(b *uiprogress.Bar) string {
+		return fmt.Sprintf("Processing :: [ %d / %d ] :: ",
+			barGenerator.Current(), lenghtFiles)
+	})
+	errGroup := new(errgroup.Group)
+
+	errGroup.Go(func() error {
+		for err := range g.errChannel {
+			if err != nil {
+				return fmt.Errorf("[!] Error :: %s \n", err.Error())
+			}
+		}
+		return nil
+	})
+	errGroup.Go(func() error {
+		for i := 0; i < len(g.files); i++ {
+			<-g.done
+			barGenerator.Incr()
+		}
+		g.safeClosed()
+		uiprogress.Stop()
+		return nil
+	})
+
+	for i := 0; i < numCPU; i++ {
+		errGroup.Go(func() error {
+			for batch := range g.jobsChannel {
+				SliceFilter(exAddersIPs, clients, batch, numCPU)
+			}
+			return nil
+		})
+	}
+
+	return errGroup.Wait()
+}
+func (g *Generator) Go(paths []string) {
+	cgoLimiter := make(chan struct{}, g.threads*2)
 	go func() {
 		defer func() {
-			close(g.errChannel)
 			close(cgoLimiter)
 		}()
 		for _, path := range paths {
 			cgoLimiter <- struct{}{}
 			g.wg.Add(1)
 			go func(filename string) {
-				defer func() {
-					<-cgoLimiter
-					done <- struct{}{}
-					g.wg.Done()
-				}()
-				err := init_entrys(filename,g.filter)
-				if err != nil {
-					g.errChannel <- err
-					return
-				}
-
+				rec, err := g.init_entrys(filename)
+				g.jobsChannel <- rec
+				g.errChannel <- err
+				<-cgoLimiter
+				g.done <- struct{}{}
+				g.wg.Done()
 			}(path)
 		}
 	}()
-}
 
+}
 func (g *Generator) safeClosed() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.closed {
 		g.wg.Wait()
+		close(g.errChannel)
+		close(g.jobsChannel)
+		close(g.done)
 		g.closed = true
 	}
 }
-func init_entrys(path string,fn filterFunc)error{
+func (g *Generator) init_entrys(path string) ([]*ftrecord, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 
@@ -135,17 +167,16 @@ func init_entrys(path string,fn filterFunc)error{
 	}
 
 	C.ft2goarr(ftio, &cgoRecords[0])
-
+	ft := make([]*ftrecord, flowsCount)
 	for i := 0; i < flowsCount; i++ {
-		rec := getPool()
-		rec.exAddr =  uint32(cgoRecords[i].exAddr)
+		rec := &ftrecord{}
+		rec.exAddr = uint32(cgoRecords[i].exAddr)
 		rec.srcAddr = uint32(cgoRecords[i].srcAddr)
 		rec.dstAddr = uint32(cgoRecords[i].dstAddr)
-		rec.bytes =   uint32(cgoRecords[i].bytes)
-		fn(rec)
-		putPool(rec)
+		rec.bytes = uint32(cgoRecords[i].bytes)
+		ft[i] = rec
 		C.free(unsafe.Pointer(cgoRecords[i]))
 	}
 
-	return nil
+	return ft, nil
 }
