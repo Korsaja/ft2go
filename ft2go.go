@@ -35,7 +35,7 @@ func WalkPath(root string) (paths []string, err error) {
 			strings.Contains(info.Name(),"tmp"){
 			return nil
 		}
-		paths = append(paths, path)git
+		paths = append(paths, path)
 		return nil
 	})
 	if err != nil {
