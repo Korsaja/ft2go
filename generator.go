@@ -21,8 +21,9 @@ void ft2goarr(struct ftio *ftio,ft2go **in){
     struct fts3rec_offsets fo;
     struct ftver ftv;
     char *rec;
+
     ftprof_start(&ftp);
-    ftio_get_ver (ftio, &ftv);
+    ftio_get_ver(ftio, &ftv);
     fts3rec_compute_offsets (&fo, &ftv);
 	int i = 0;
     while((rec = ftio_read(ftio))){
@@ -30,6 +31,7 @@ void ft2goarr(struct ftio *ftio,ft2go **in){
         in[i]->srcAddr = *((u_int32 *) (rec + fo.srcaddr));
         in[i]->dstAddr = *((u_int32 *) (rec + fo.dstaddr));
   		in[i]->bytes = *((u_int32 *) (rec + fo.dOctets));
+
 		i++;
 		// for adding ports or other fields see https://github.com/adsr/flow-tools/blob/master/lib/ftlib.h#L613
        // ft2go_rec->srcPort = *((u_int16 *) (rec + fo.srcport));
@@ -41,6 +43,7 @@ void ft2goarr(struct ftio *ftio,ft2go **in){
 */
 import "C"
 import (
+	"errors"
 	"fmt"
 	"github.com/gosuri/uiprogress"
 	"golang.org/x/sync/errgroup"
@@ -48,6 +51,7 @@ import (
 	"os"
 	"sync"
 	"unsafe"
+	"sync/atomic"
 )
 
 const StructSize = 1 << 28
@@ -65,7 +69,7 @@ type Generator struct {
 
 func NewGenerator(threads int, ftFiles []string) *Generator {
 	return &Generator{
-		jobsChannel: make(chan []*ftrecord, threads),
+		jobsChannel: make(chan []*ftrecord, threads*2),
 		errChannel:  make(chan error, 1),
 		done:        make(chan struct{},len(ftFiles)),
 		files:       ftFiles,
@@ -75,7 +79,7 @@ func NewGenerator(threads int, ftFiles []string) *Generator {
 		threads:     threads,
 	}
 }
-func (g *Generator) Start(exAddersIPs []net.IP, clients *Clients, numCPU int) error {
+func (g *Generator) Start(exAddersIPs []net.IP, clients *Clients) error {
 	lenghtFiles := len(g.files)
 	uiprogress.Start()
 	barGenerator := uiprogress.AddBar(lenghtFiles)
@@ -84,12 +88,14 @@ func (g *Generator) Start(exAddersIPs []net.IP, clients *Clients, numCPU int) er
 		return fmt.Sprintf("Processing :: [ %d / %d ] :: ",
 			barGenerator.Current(), lenghtFiles)
 	})
-	errGroup := new(errgroup.Group)
 
+	errGroup := new(errgroup.Group)
 	errGroup.Go(func() error {
 		for err := range g.errChannel {
-			if err != nil {
-				return fmt.Errorf("[!] Error :: %s \n", err.Error())
+			if err != nil{
+				if errors.Is(err,ErrFtioInvalid){
+					fmt.Fprintf(os.Stdin,"%s\n",err.Error())
+				}
 			}
 		}
 		return nil
@@ -103,7 +109,7 @@ func (g *Generator) Start(exAddersIPs []net.IP, clients *Clients, numCPU int) er
 		uiprogress.Stop()
 		return nil
 	})
-
+	var numCPU = 8
 	for i := 0; i < numCPU; i++ {
 		errGroup.Go(func() error {
 			for batch := range g.jobsChannel {
@@ -125,12 +131,14 @@ func (g *Generator) Go(paths []string) {
 			cgoLimiter <- struct{}{}
 			g.wg.Add(1)
 			go func(filename string) {
+				defer func() {
+					<-cgoLimiter
+					g.done <- struct{}{}
+					g.wg.Done()
+				}()
 				rec, err := g.init_entrys(filename)
 				g.jobsChannel <- rec
 				g.errChannel <- err
-				<-cgoLimiter
-				g.done <- struct{}{}
-				g.wg.Done()
 			}(path)
 		}
 	}()
@@ -148,7 +156,7 @@ func (g *Generator) safeClosed() {
 	}
 }
 func (g *Generator) init_entrys(path string) ([]*ftrecord, error) {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path,os.O_RDONLY,0664)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +165,10 @@ func (g *Generator) init_entrys(path string) ([]*ftrecord, error) {
 	ftio := (*C.struct_ftio)(C.calloc(1, C.sizeof_ftio))
 	defer C.free(unsafe.Pointer(ftio))
 
-	C.ftio_init(ftio, C.int(f.Fd()), C.FT_IO_FLAG_READ)
+	errno := C.ftio_init(ftio, C.int(f.Fd()), C.FT_IO_FLAG_READ)
+	if errno < 0 {
+		return nil,ErrFtioInvalid
+	}
 	flowsCount := int(ftio.fth.flows_count)
 	cgoRecords := (*[StructSize]*C.ft2go)(C.calloc(C.ulong(flowsCount), C.sizeof_ft2go))
 	defer C.free(unsafe.Pointer(cgoRecords))
@@ -167,6 +178,7 @@ func (g *Generator) init_entrys(path string) ([]*ftrecord, error) {
 	}
 
 	C.ft2goarr(ftio, &cgoRecords[0])
+
 	ft := make([]*ftrecord, flowsCount)
 	for i := 0; i < flowsCount; i++ {
 		rec := &ftrecord{}
@@ -179,4 +191,35 @@ func (g *Generator) init_entrys(path string) ([]*ftrecord, error) {
 	}
 
 	return ft, nil
+}
+
+func SliceFilter(exAddr []net.IP, clients *Clients, batch []*ftrecord, numCPU int) {
+	f := func(i, j int, c chan struct{}) {
+		for ; i < j; i++ {
+			for _, exAdd := range exAddr {
+				if exAdd.Equal((batch)[i].ExAddr()) {
+					for _, c := range *clients {
+						for _, ipNet := range c.ipNets {
+							if ipNet.Contains((batch)[i].SrcAddr()) ||
+								ipNet.Contains((batch)[i].DstAddr()) {
+								atomic.AddUint64(&c.sum, uint64((batch)[i].bytes))
+							}
+						}
+					}
+				}
+			}
+		}
+		c <- struct{}{}
+	}
+
+	c := make(chan struct{}, numCPU)
+	length := len(batch)
+	for i := 0; i < numCPU; i++ {
+		go f(i*length/numCPU, (i+1)*length/numCPU, c)
+	}
+
+	for i := 0; i < numCPU; i++ {
+		<-c
+	}
+	batch = nil
 }

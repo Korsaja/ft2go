@@ -1,12 +1,10 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"net"
 )
 
-var ErrInvalidIP = errors.New("Bad IP address")
 
 type ftrecord struct {
 	exAddr  uint32

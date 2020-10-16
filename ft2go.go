@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"time"
 )
+
 
 var usage = func() {
 	fmt.Println("usage: ./ft2go -path test/ " +
@@ -24,47 +24,18 @@ var usage = func() {
 		"-w 8 -pr=true -csv=true -emails username@mails.ru")
 }
 
-func SliceFilter(exAddr []net.IP, clients *Clients, batch []*ftrecord, numCPU int) {
-	f := func(i, j int, c chan struct{}) {
-		for ; i < j; i++ {
-			for _, exAdd := range exAddr {
-				if exAdd.Equal((batch)[i].ExAddr()) {
-					for _, c := range *clients {
-						for _, ipNet := range c.ipNets {
-							if ipNet.Contains((batch)[i].SrcAddr()) ||
-								ipNet.Contains((batch)[i].DstAddr()) {
-								atomic.AddUint64(&c.sum, uint64((batch)[i].bytes))
-							}
-						}
-					}
-				}
-			}
-		}
-		c <- struct{}{}
-	}
 
-	c := make(chan struct{}, numCPU)
-	length := len(batch)
-	for i := 0; i < numCPU; i++ {
-		go f(i*length/numCPU, (i+1)*length/numCPU, c)
-	}
-
-	for i := 0; i < numCPU; i++ {
-		<-c
-	}
-	batch = nil
-	runtime.GC()
-}
 func WalkPath(root string) (paths []string, err error) {
 	err = filepath.Walk(root, func(path string,
 		info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if !info.Mode().IsRegular() {
+		if !info.Mode().IsRegular() ||
+			strings.Contains(info.Name(),"tmp"){
 			return nil
 		}
-		paths = append(paths, path)
+		paths = append(paths, path)git
 		return nil
 	})
 	if err != nil {
@@ -75,7 +46,7 @@ func WalkPath(root string) (paths []string, err error) {
 func DataInfo(conf *Config, exAdders, filters, dir string) (ex []net.IP, c *Clients, err error) {
 	exAddressSplit := strings.Split(exAdders, ",")
 	if len(exAddressSplit) == 0 {
-		return nil, nil, fmt.Errorf("[!] Error :: Invalid exAddrs or not entered\n")
+		return nil, nil, ErrInvalidExAddr
 	}
 	exAddersIPs := make([]net.IP, 0)
 	for _, device := range conf.Devices {
@@ -94,7 +65,7 @@ func DataInfo(conf *Config, exAdders, filters, dir string) (ex []net.IP, c *Clie
 
 	nFilters := strings.Split(filters, ",")
 	if len(nFilters) == 0 {
-		return nil, nil, fmt.Errorf("[!] Error :: not entered nfilter\n")
+		return nil, nil, ErrNoFilters
 	}
 
 	var clients Clients
@@ -155,13 +126,13 @@ func main() {
 	numCPU := flag.Int("w", 8, "workers")
 	print := flag.Bool("pr", false, "print table")
 	csvFile := flag.Bool("csv", false, "csv file")
-	help := flag.String("h","","help")
+	help := flag.String("h", "", "help")
 	flag.Parse()
 	flag.Usage = usage
 	if len(os.Args) < 2 ||
 		len(*help) != 0 ||
 		len(*filters) == 0 ||
-		len(*exAdders) == 0{
+		len(*exAdders) == 0 {
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -190,9 +161,11 @@ func main() {
 
 	generator := NewGenerator(*numCPU, ftFiles)
 	generator.Go(ftFiles)
-	if err := generator.Start(exAddersIPs, clients, *numCPU); err != nil {
+	if err := generator.Start(exAddersIPs, clients); err != nil {
 		fmt.Fprintf(os.Stdout, "%v", err.Error())
 	}
+
+	time.AfterFunc(5*time.Second, func() {runtime.GC()})
 
 
 	// Show results
@@ -209,12 +182,12 @@ func main() {
 
 	if len(*emails) != 0 {
 		mails := strings.Split(*emails, ",")
-		d := mail.NewDialer(conf.SMTP.Server, conf.SMTP.Port, conf.SMTP.Mail,conf.SMTP.Pass)
-		for _, xMail := range mails{
+		d := mail.NewDialer(conf.SMTP.Server, conf.SMTP.Port, conf.SMTP.Mail, conf.SMTP.Pass)
+		for _, xMail := range mails {
 			m := mail.NewMessage()
-			m.SetHeader("From",conf.SMTP.Mail)
-			m.SetHeader("To",xMail)
-			m.SetHeader("Subject",*subject)
+			m.SetHeader("From", conf.SMTP.Mail)
+			m.SetHeader("To", xMail)
+			m.SetHeader("Subject", *subject)
 			m.SetBodyWriter("text/plain", func(writer io.Writer) error {
 				clients.Report(writer)
 				return nil
@@ -231,7 +204,7 @@ func main() {
 			if err := d.DialAndSend(m); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 			}
-			fmt.Fprintf(os.Stdout,"Send mail to :: %s :: Done\n",xMail)
+			fmt.Fprintf(os.Stdout, "Send mail to :: %s :: Done\n", xMail)
 		}
 
 	}
