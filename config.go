@@ -2,7 +2,6 @@ package main
 
 import "github.com/BurntSushi/toml"
 
-
 type Config struct {
 	SMTP struct {
 		Server string `toml:"server"`
@@ -18,8 +17,9 @@ type Config struct {
 	} `toml:"devices"`
 	Nfilters []struct {
 		Attr []struct {
-			Ips  []string `toml:"ips"`
-			Name string   `toml:"name"`
+			Ips       []string `toml:"ips"`
+			Name      string   `toml:"name"`
+			Interface int      `toml:"iface"`
 		} `toml:"attr"`
 	} `toml:"nfilters"`
 }

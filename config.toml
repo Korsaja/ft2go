@@ -1,0 +1,54 @@
+#smtp
+[smtp]
+server = "mail.izhteleport.ru"
+port = 25
+mail = "netflowbot@izhteleport.ru"
+pass = "v7VPkdhx"
+#exaddr name gateway
+[[devices]]
+[[devices.attr]]
+ip = "91.109.224.1"
+name = "tcs0"
+[[devices.attr]]
+ip = "185.173.74.255"
+name = "tcs1"
+[[devices.attr]]
+ip = "10.12.0.2"
+name = "tcs4"
+[[devices.attr]]
+ip = "91.109.230.1"
+name = "tcs5"
+[[devices.attr]]
+ip = "91.109.230.255"
+name = "tcs6"
+[[devices.attr]]
+ip = "185.173.72.255"
+name = "br0"
+[[devices.attr]]
+ip = "185.173.73.255"
+name = "br1"
+# filters
+[[nfilters]]
+[[nfilters.attr]]
+ips = ["10.192.0.0/10"]
+name = "allka"
+[[nfilters]]
+[[nfilters.attr]]
+ips = ["10.253.0.0/16","10.221.0.0/16"]
+name = "satys"
+iface = 0
+[[nfilters.attr]]
+ips = ["10.244.0.0/16","10.212.0.0/16"]
+name = "rusat"
+[[nfilters.attr]]
+ips = ["10.255.0.0/16","10.254.0.0/16","10.223.0.0/16","10.222.0.0/16"]
+name = "telematika"
+[[nfilters.attr]]
+ips = ["10.205.0.0/16","10.237.0.0/16"]
+name = "alink"
+[[nfilters.attr]]
+ips = ["10.239.48.0/20"]
+name = "udsz_ka"
+[[nfilters.attr]]
+ips = ["10.245.5.0/26"]
+name = "ldk005"
