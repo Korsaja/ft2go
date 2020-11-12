@@ -14,16 +14,14 @@ import (
 	"time"
 )
 
-
 var usage = func() {
 	fmt.Println("usage: ./ft2go -path test/ " +
 		"-ex router1  -nf vlan10," +
 		" -conf config.toml -w 10 -pr=true" +
-		" -csv=true -emails test@email.com" +
+		" -csv=true -emails test@email.com -subj Netflow" +
 		"ex: ./bot -path var/log/netflow -ex br0  -nf satys," +
-		"-w 8 -pr=true -csv=true -emails username@mails.ru")
+		"-w 8 -pr=true -csv=true -emails username@mails.ru -subj Netflow")
 }
-
 
 func WalkPath(root string) (paths []string, err error) {
 	err = filepath.Walk(root, func(path string,
@@ -32,7 +30,7 @@ func WalkPath(root string) (paths []string, err error) {
 			return err
 		}
 		if !info.Mode().IsRegular() ||
-			strings.Contains(info.Name(),"tmp"){
+			strings.Contains(info.Name(), "tmp") {
 			return nil
 		}
 		paths = append(paths, path)
@@ -90,6 +88,7 @@ func DataInfo(conf *Config, exAdders, filters, dir string) (ex []net.IP, c *Clie
 						Name:    attr.Name,
 						ipNets:  make([]*net.IPNet, 0),
 						exAddr:  make([]string, 0),
+						iface:   attr.Interface,
 						dateStr: dateStr,
 					}
 					for _, ips := range attr.Ips {
@@ -136,22 +135,22 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stdout, "Reading config...\n")
+	_, _ = fmt.Fprintf(os.Stdout, "Reading config...\n")
 	conf, err := ReadConfig(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[!] Error :: %s \n", err.Error())
+		_, _ = fmt.Fprintf(os.Stderr, "[!] Error :: %s \n", err.Error())
 		os.Exit(1)
 	}
 
 	exAddersIPs, clients, err := DataInfo(conf, *exAdders, *filters, *dirFiles)
 	if err != nil {
-		fmt.Fprintf(os.Stdout, "%v", err)
+		_, _ = fmt.Fprintf(os.Stdout, "%v", err)
 	}
 
 	//Get absolute path for file flow - tools
 	ftFiles, err := WalkPath(*dirFiles)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[!] Error :: %s \n", err.Error())
+		_, _ = fmt.Fprintf(os.Stderr, "[!] Error :: %s \n", err.Error())
 		os.Exit(1)
 	}
 
@@ -162,10 +161,14 @@ func main() {
 	generator := NewGenerator(*numCPU, ftFiles)
 	generator.Go(ftFiles)
 	if err := generator.Start(exAddersIPs, clients); err != nil {
-		fmt.Fprintf(os.Stdout, "%v", err.Error())
+		_, _ = fmt.Fprintf(os.Stdout, "%v", err.Error())
 	}
 
-	time.AfterFunc(5*time.Second, func() {runtime.GC()})
+	go func() {
+		for range time.Tick(time.Minute) {
+			runtime.GC()
+		}
+	}()
 
 
 	// Show results
@@ -176,7 +179,7 @@ func main() {
 	if *csvFile {
 		err = clients.WriteCSV()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			_, _ = fmt.Fprintln(os.Stderr, err)
 		}
 	}
 
@@ -196,15 +199,15 @@ func main() {
 			if *csvFile {
 				f, err := os.Open(clients.GetNames())
 				if err != nil {
-					fmt.Fprintln(os.Stderr, err)
+					_, _ = fmt.Fprintln(os.Stderr, err)
 				}
 				defer f.Close()
 				m.Attach(clients.GetNames())
 			}
 			if err := d.DialAndSend(m); err != nil {
-				fmt.Fprintln(os.Stderr, err)
+				_, _ = fmt.Fprintln(os.Stderr, err)
 			}
-			fmt.Fprintf(os.Stdout, "Send mail to :: %s :: Done\n", xMail)
+			_, _ = fmt.Fprintf(os.Stdout, "Send mail to :: %s :: Done\n", xMail)
 		}
 
 	}

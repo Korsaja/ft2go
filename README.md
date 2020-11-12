@@ -22,10 +22,12 @@ name = "router2"
 [[nfilters.attr]]
 ips = ["192.168.20.0/24"]
 name = "vlan20"
+iface = 1
 [[nfilters]]
 [[nfilters.attr]]
 ips = ["192.168.20.0/24","192.168.10.0/24"]
 name = "allvlan"
+iface = 2
 ```
 If you need to add netflow fields see names and data types add them to the `generator.go`:<br>
 https://github.com/adsr/flow-tools/blob/master/lib/ftlib.h#L613

@@ -11,6 +11,8 @@ typedef struct ft2go {
          unsigned long srcAddr;
          unsigned long dstAddr;
          unsigned long bytes;
+		 unsigned long sif;
+		 unsigned long dif;
 }ft2go;
 struct ftio ftio;
 struct ftprof ftp;
@@ -31,7 +33,8 @@ void ft2goarr(struct ftio *ftio,ft2go **in){
         in[i]->srcAddr = *((u_int32 *) (rec + fo.srcaddr));
         in[i]->dstAddr = *((u_int32 *) (rec + fo.dstaddr));
   		in[i]->bytes = *((u_int32 *) (rec + fo.dOctets));
-
+		in[i]->sif = *((u_int16 *) (rec + fo.input));
+		in[i]->dif = *((u_int16 *) (rec + fo.output));
 		i++;
 		// for adding ports or other fields see https://github.com/adsr/flow-tools/blob/master/lib/ftlib.h#L613
        // ft2go_rec->srcPort = *((u_int16 *) (rec + fo.srcport));
@@ -50,11 +53,20 @@ import (
 	"net"
 	"os"
 	"sync"
-	"unsafe"
 	"sync/atomic"
+	"unsafe"
 )
 
 const StructSize = 1 << 28
+
+type Mode int
+
+const (
+	ALL Mode = iota + 1
+	IFACE
+	IPNET
+)
+
 
 type Generator struct {
 	jobsChannel chan []*ftrecord
@@ -80,13 +92,13 @@ func NewGenerator(threads int, ftFiles []string) *Generator {
 	}
 }
 func (g *Generator) Start(exAddersIPs []net.IP, clients *Clients) error {
-	lenghtFiles := len(g.files)
+	lengthFiles := len(g.files)
 	uiprogress.Start()
-	barGenerator := uiprogress.AddBar(lenghtFiles)
+	barGenerator := uiprogress.AddBar(lengthFiles)
 	barGenerator.PrependElapsed().AppendCompleted()
 	barGenerator.PrependFunc(func(b *uiprogress.Bar) string {
 		return fmt.Sprintf("Processing :: [ %d / %d ] :: ",
-			barGenerator.Current(), lenghtFiles)
+			barGenerator.Current(), lengthFiles)
 	})
 
 	errGroup := new(errgroup.Group)
@@ -94,7 +106,7 @@ func (g *Generator) Start(exAddersIPs []net.IP, clients *Clients) error {
 		for err := range g.errChannel {
 			if err != nil{
 				if errors.Is(err,ErrFtioInvalid){
-					fmt.Fprintf(os.Stdin,"%s\n",err.Error())
+					_, _ = fmt.Fprintf(os.Stdin, "%s\n", err.Error())
 				}
 			}
 		}
@@ -113,7 +125,7 @@ func (g *Generator) Start(exAddersIPs []net.IP, clients *Clients) error {
 	for i := 0; i < numCPU; i++ {
 		errGroup.Go(func() error {
 			for batch := range g.jobsChannel {
-				SliceFilter(exAddersIPs, clients, batch, numCPU)
+				sliceFilter(exAddersIPs, clients, batch, numCPU)
 			}
 			return nil
 		})
@@ -186,6 +198,8 @@ func (g *Generator) init_entrys(path string) ([]*ftrecord, error) {
 		rec.srcAddr = uint32(cgoRecords[i].srcAddr)
 		rec.dstAddr = uint32(cgoRecords[i].dstAddr)
 		rec.bytes = uint32(cgoRecords[i].bytes)
+		rec.sif = uint16(cgoRecords[i].sif)
+		rec.dif = uint16(cgoRecords[i].dif)
 		ft[i] = rec
 		C.free(unsafe.Pointer(cgoRecords[i]))
 	}
@@ -193,15 +207,18 @@ func (g *Generator) init_entrys(path string) ([]*ftrecord, error) {
 	return ft, nil
 }
 
-func SliceFilter(exAddr []net.IP, clients *Clients, batch []*ftrecord, numCPU int) {
+func sliceFilter(exAddr []net.IP, clients *Clients, batch []*ftrecord, numCPU int) {
+
 	f := func(i, j int, c chan struct{}) {
 		for ; i < j; i++ {
 			for _, exAdd := range exAddr {
 				if exAdd.Equal((batch)[i].ExAddr()) {
 					for _, c := range *clients {
 						for _, ipNet := range c.ipNets {
-							if ipNet.Contains((batch)[i].SrcAddr()) ||
-								ipNet.Contains((batch)[i].DstAddr()) {
+							if ipNet.Contains((batch)[i].SrcAddr())   ||
+								ipNet.Contains((batch)[i].DstAddr())  ||
+								c.iface == int((batch)[i].SourceIF()) ||
+								c.iface == int((batch)[i].DstIF()){
 								atomic.AddUint64(&c.sum, uint64((batch)[i].bytes))
 							}
 						}

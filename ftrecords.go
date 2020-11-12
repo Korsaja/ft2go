@@ -5,17 +5,20 @@ import (
 	"net"
 )
 
-
 type ftrecord struct {
 	exAddr  uint32
 	srcAddr uint32
 	dstAddr uint32
 	bytes   uint32
+	sif     uint16
+	dif     uint16
 }
 
-func (ft *ftrecord) ExAddr() net.IP  { return uint2ip(ft.exAddr) }
-func (ft *ftrecord) SrcAddr() net.IP { return uint2ip(ft.srcAddr) }
-func (ft *ftrecord) DstAddr() net.IP { return uint2ip(ft.dstAddr) }
+func (ft *ftrecord) ExAddr() net.IP   { return uint2ip(ft.exAddr) }
+func (ft *ftrecord) SrcAddr() net.IP  { return uint2ip(ft.srcAddr) }
+func (ft *ftrecord) DstAddr() net.IP  { return uint2ip(ft.dstAddr) }
+func (ft *ftrecord) SourceIF() uint16 { return ft.sif }
+func (ft *ftrecord) DstIF() uint16    { return ft.dif }
 
 func ip2uint(ip net.IP) (uint32, error) {
 	ip = ip.To4()
